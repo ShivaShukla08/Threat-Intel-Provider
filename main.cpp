@@ -1,19 +1,58 @@
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <string>
 #include <cpr/cpr.h>
 #include <regex>
 #include <sqlite3.h>
+#include "json/json.h"
 
 using namespace std;
 using namespace cpr;
+using namespace Json;
+
+string enrichment_url = "https://api.abuseipdb.com/api/v2/check?";
+string api_key = "99cf1e1eb8a6e51b730c8a322f467fd37146bf9dba2ca94dc494a56dd22c097c51e6226364324e4b";
+string header = "{\"Key\" :" + api_key+"}";
 
 //void storeIOC(map<string,vector<string>>);
+
+
+static int callback(void* data, int argc, char** argv, char** azColName)
+{
+    int i;
+    fprintf(stderr, "%s: ", (const char*)data);
+  
+    for (i = 0; i < argc; i++) {
+        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+    }
+  
+    printf("\n");
+    return 0;
+}
+
+static int savefile(void* data, int argc, char** argv, char** azColName)
+{
+	ofstream myfile;
+	myfile.open ("intel.csv");
+	myfile << "Value, TLP, Type, Sighting, ConfidenceScore, maliciousness.\n";
+    int i;
+    fprintf(stderr, "%s: ", (const char*)data);
+  
+    for (i = 0; i < argc; i++) {
+         string val = argv[i] ? argv[i] : "NULL");
+		 myfile << val << \n;
+    }
+	
+	myfile.close();
+	cout << endl;
+    return 0;
+}
+
 
 void getIOC(string HTML_Content, regex temp, string ioc,map<string,vector<string>>&m)
 {
 	smatch match;
-	//cout << "HTML_Content is: " << HTML_Content << endl;
     while (regex_search(HTML_Content, match, temp))
 	{
 		m[ioc].push_back(match.str(0));
@@ -28,7 +67,6 @@ void getIOC(string HTML_Content, regex temp, string ioc,map<string,vector<string
 			cout << v[i] << endl;
 		}
 	}
-	return;
 }
 
 void storeIOC(map<string,vector<string>>&m)
@@ -36,7 +74,6 @@ void storeIOC(map<string,vector<string>>&m)
 	sqlite3* DB;
 	int exit = 0;
 	exit = sqlite3_open("example.db", &DB);
-	
 	
 	if(exit) 
 	{
@@ -74,13 +111,24 @@ void storeIOC(map<string,vector<string>>&m)
 		for(int i=0;i<v.size();i++)
 		{
 			string temp = v[i];
-			sql = ("INSERT INTO IOCs VALUES( '" + temp + "', 'GREEN', '" + type + "' , 1, 60, 'Malicious');");
+			Response r = Get(Url{enrichment_url+ type +"="+temp}, Header{header});
+			string js = r.text;
+			int confidence_score = js["data"]["abuseConfidenceScore"];
+			if(confidence_score>65)
+			{
+				sql = ("INSERT INTO IOCs VALUES( '" + temp + "', 'GREEN', '" + type + "' , 1, " + confidence_score +", 'Malicious');");
+			}
+			else
+			{
+				sql = ("INSERT INTO IOCs VALUES( '" + temp + "', 'GREEN', '" + type + "' , 1, " + confidence_score +", 'Non-Malicious');");
+			}
+			
 			exit = sqlite3_exec(DB, sql.c_str(), NULL, 0, &messaggeError);
 			if(exit != SQLITE_OK) 
 			{
 				cerr << "Error Inserting values" << endl;
 				cerr<<messaggeError;
-				sqlite3_free(messaggeError);
+				sqlite3_free(messaggeError);	
 			}
 			else
 			{
@@ -92,82 +140,161 @@ void storeIOC(map<string,vector<string>>&m)
 	sqlite3_close(DB);
 }
 
-void printIOC(string temp)
+void quickAddIntel(string type, string value)
 {
-	cout << endl << endl << "Printing the data of: " << temp << endl;
-	//for(auto x:m[temp])
+	string temp = value;
+	Response r = Get(Url{enrichment_url+ type +"="+ value}, Header{header});
+	string js = r.text;
+	int confidence_score = js["data"]["abuseConfidenceScore"];
+	if(confidence_score>65)
 	{
-		//cout << x << endl;
+		sql = ("INSERT INTO IOCs VALUES( '" + temp + "', 'GREEN', '" + type + "' , 1, " + confidence_score +", 'Malicious');");
+	}
+	else
+	{
+		sql = ("INSERT INTO IOCs VALUES( '" + temp + "', 'GREEN', '" + type + "' , 1, " + confidence_score +", 'Non-Malicious');");
+	}
+	
+	exit = sqlite3_exec(DB, sql.c_str(), NULL, 0, &messaggeError);
+	if(exit != SQLITE_OK) 
+	{
+		cerr << "Error Inserting values" << endl;
+		cerr<<messaggeError;
+		sqlite3_free(messaggeError);	
+	}
+	else
+	{
+		cout << "Inserted Successfully" << endl;
 	}
 }
-
-map<string,vector<string>> parsing(string HTML_Content){
+map<string,vector<string>> parseIOC(string HTML_Content){
 	regex ipv4("(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)");
 	regex ipv6("(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))");
 	regex email("(\\w+)(\\.|_)?(\\w*)@(\\w+)(\\.(\\w+))+");
 	regex domain("\\b([a-z0-9]+(-[a-z0-9]+)*\\.)+[a-z]{2,}\\b");
 	regex url("((http|https)://)(www.)?[a-zA-Z0-9@:%.\\+~#?&//=]{2,256}\\.[a-z]{2,6}\\b([-a-zA-Z0-9@:%.\\+~#?&//=]*)");
 	
-
+	// map<Type of IOC, List of IOC>
+	
 	map<string,vector<string>> m ;
 	getIOC(HTML_Content, ipv4,"ipv4",m);
-	//printIOC("ipv4");
+	getIOC(HTML_Content, ipv6,"ipv6", m);
+	getIOC(HTML_Content, email,"email", m);
+    getIOC(HTML_Content, domain,"domain", m);
+    getIOC(HTML_Content, url,"url", m);
 	return m;
-	//getIOC(HTML_Content, ipv6,"ipv6");
-	//printIOC("ipv6");
-	//getIOC(HTML_Content, email);
-    //getIOC(HTML_Content, domain);
-    //getIOC(HTML_Content, url);
+}
+
+string MakeRequest(string url)
+{
+	Response r = Get(Url{url});
+	cout << "Status code: " << r.status_code << '\n';
+	string HTML_Content = r.text;
+	return HTML_Content;	
+}
+
+
+void getData(string ioc_type)
+{
+	string query = "select value from IOCs where type = " + ioc_type;
+	exit = sqlite3_exec(DB, query.c_str(), callback , 0, &messaggeError);
+	if(exit != SQLITE_OK) 
+	{
+		cerr << "Error Gettting values" << endl;
+		cerr<<messaggeError;
+		sqlite3_free(messaggeError);	
+	}
+	else
+	{
+		cout << "Retrieved successfully" << endl;
+	}
+	
+	
+}
+
+void exportCSV()
+{
+	string query = "select * from IOCs";
+	
+	exit = sqlite3_exec(DB, query.c_str(), savefile , 0, &messaggeError);
+	if(exit != SQLITE_OK) 
+	{
+		cerr << "Error While executing query" << endl;
+		cerr<<messaggeError;
+		sqlite3_free(messaggeError);	
+	}
+	else
+	{
+		cout << "Query executed successfully" << endl;
+	}
 }
 
 int main()
 {
 	cout << endl << endl << "     **---- Welcome to Threat Intel Provider ----**          " << endl << endl;
-	cout << "Press 1: To Get Confidence score of URL" << endl;
-	cout << "Press 2: To Get Confidence score of IPV4" << endl;
-	cout << "Press 3: To Get Confidence score of IPV6" << endl;
-	cout << "Press 4: To Get Confidence score of DOMAIN" << endl;
-	cout << "Press 5: To Get Confidence score of EMAIL" << endl << endl;
 	
-	int choose_option;
-	cin >> choose_option;
+	cout << "Enter 1 to Fetch the IOCs from URL" << endl;
+	cout << "Enter 2 to quick add the Intel" << endl;
+	cout << "Enter 3 for getting IOC of specific type from Database" << endl;
+	cout << "Enter 4 for exporting the Data in CSV or Excel format" << endl;
 	
-	switch(choose_option)
+	int option;
+	cin >> option;
+	
+	switch(option)
 	{
 		case 1:
 		{
 			string url;
-			cout << "Enter the URL you want to fetch IOCs: ";
+			cout << "Enter the URL" << endl;
 			cin >> url;
-			Response r = Get(Url{url});
-			cout << endl;
-			//cout << "Status code: " << r.status_code << '\n';
-			string HTML_Content = r.text;
-			map<string,vector<string>>m = parsing(HTML_Content);
+			string HTML_Content = MakeRequest(url);
+			map<string,vector<string>>m = parseIOC(HTML_Content);		
 			storeIOC(m);
 			break;
 		}
 		case 2:
 		{
+			cout << "Enter the IOC type ";
+			string ioc_type;
+			cin >> ioc_type;
+			
+			cout << endl;
+			cout << "Enter value of the IOC: ";
+			string value;
+			cin >> value;
+			cout << endl;
 			break;
 		}
 		case 3:
 		{
+			cout << "Enter the IOC type ";
+			string ioc_type;
+			cin >> ioc_type;
+			
+			getData(ioc_type);
 			break;
 		}
 		case 4:
 		{
-			break;
-		}
-		case 5:
-		{
-			break;
+			cout << "Enter the file format in which you want to import" << endl;
+			cout << "Provide the input as csv or excel" << endl;
+			
+			string filetype;
+			cin >> filetype;
+			
+			if(filetype == "csv")
+			{
+				exportCSV();
+			}
+			else
+			{
+				exportExcel();
+			}
 		}
 		default:
 		{
 			cout << "INVALID INPUT" << endl;
-			break;
 		}
 	}
-	
 }
