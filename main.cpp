@@ -212,6 +212,10 @@ void getData(string ioc_type)
 	
 }
 
+void exportExcel()
+{
+	// Not Implemented Yet
+}
 void exportCSV()
 {
 	string query = "select * from IOCs";
@@ -291,6 +295,7 @@ int main()
 			{
 				exportExcel();
 			}
+			break:
 		}
 		default:
 		{
